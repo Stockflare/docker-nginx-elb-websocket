@@ -1,0 +1,7 @@
+[template]
+src = "nginx.conf.tmpl"
+dest = "/etc/nginx/nginx.conf"
+owner = "nginx"
+mode = "0644"
+# check_cmd = "/usr/sbin/nginx -t -c {{.src}}"
+# reload_cmd = "/usr/sbin/service nginx reload"

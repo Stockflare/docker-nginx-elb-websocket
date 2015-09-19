@@ -1,25 +1,51 @@
-# Logger
+# Dreams of Websockets
 
-Stockflare uses this repository internally to centralize all of our logging from service containers running on our infrastructure.
+At Stockflare, we use this docker container to enable Websocket connections through [AWS Elastic Load Balancers](http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-elb.html).
 
-This container is loosely based upon the container described in [this AWS blog post](https://blogs.aws.amazon.com/application-management/post/TxFRDMTMILAA8X/Send-ECS-Container-Logs-to-CloudWatch-Logs-for-Centralized-Monitoring) but has had [confd](https://github.com/kelseyhightower/confd) added to it, enabling a little bit of flexibility.
+The container uses [confd]() for a one-time configuration of Nginx when the container starts, using environment variables. The Nginx configuration file is written to work in conjunction with an Elastic Load Balancer, itself using [ProxyProtocol](http://docs.aws.amazon.com/ElasticLoadBalancing/latest/DeveloperGuide/enable-proxy-protocol.html).
 
-It relies upon a few environment variables that can be configured inside the `docker run` command:
+## Usage
 
-* `AWS_REGION`: Defaults to `us-east-1`, set this to the region your running the container in.
-* `CLOUDWATCH_LOG_GROUP`: Defaults to `default`, set this to the name of your logging group.
+The container requires the presence of three environment variables. These variables will be used to configure Nginx when the container starts.
 
-## How it works
+**Note:** The resulting configuration is checked for validity.
 
-Usage: `docker run -name logger stockflare/logger`
+| Env | Purpose |
+|---|---|
+| `LISTEN_ON` | Determines which port Nginx will listen on |
+| `DESTINATION_HOSTNAME` | The hostname to proxy traffic to. This should typically be the name of the linked docker container (explained below) |
+| `DESTINATION_PORT` | The port to proxy traffic to on the destination container |
 
-Now link a service container...
+## Brief Example
 
-`docker run -link logger -P some/service-of-mine logging-executable 2>&1 >(/usr/bin/logger -t service-of-mine -p local6.info -n logger -P 514)`
+Lets say that we have the following container running on a host:
 
-This command looks a bit full on, but its pretty simple once you get the hang of it.
+```
+docker run -p 45490:45490 -n app -d my_websocket_application
+```
 
-Whilst our services take advantage of an [wrapping binary](https://github.com/Stockflare/docker-base/blob/master/bin/broadcast) added to the [stockflare/base](https://registry.hub.docker.com/u/stockflare/base/) container, we've laid it out above for you.
-It simply pipes $stdout and $stderr from our `logging-executable` which could be puma for example (if you're running a ruby project) to the logger binary. The logger binary is setup with a few flags that enable it to broadcast over TCP/UDP on port 514 to the docker linked hostname 'logger'.
+To enable this container to proxy traffic to that application, we would run the following command:
 
-Done, have fun.
+```
+docker run --link app:app \
+           -p 45400:45400 \
+           -e LISTEN_ON=45400 \
+           -e DESTINATION_HOSTNAME=app \
+           -e DESTINATION_PORT=45490 \
+           -d stockflare/nginx-elb-websocket
+```
+
+This container would then start listening to traffic on port `45400`, forwarding it to your application container on port `45490`.
+
+If you were running these containers on EC2 hosts that were part of a load balanced auto scaling group, the load balancer would be configured with the aforementioned `ProxyProtocol` on port `45400`, complete with listeners forwarding `TCP` type traffic to port `45400`.
+
+The container also provides a naive health check for ELBs located at `/ping`.
+
+## Why is this needed?
+
+Out-of-the-box, ELBs do not support Websockets and therefore require an additional proxy for which the connections must be negotiated through. There exist many blog posts on the internet, documenting the process for what we've done here. We wanted to create a more _generic_ and _complete_ approach to this. Below are some of the resources that we used:
+
+* [Web Apps: WebSockets with AWS Elastic Load Balancing](http://blog.flux7.com/web-apps-websockets-with-aws-elastic-load-balancing)
+* [Load-balancing Websockets on EC2](https://medium.com/@Philmod/load-balancing-websockets-on-ec2-1da94584a5e9)
+* [600k concurrent websocket connections on AWS using Node.js](http://www.jayway.com/2015/04/13/600k-concurrent-websocket-connections-on-aws-using-node-js/)
+* [Load balancing WebSockets with ELB and nginx on EC2](http://blog.seafuj.com/using-elb-with-websockets)
